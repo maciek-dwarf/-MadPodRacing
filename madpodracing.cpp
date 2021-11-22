@@ -1,16 +1,11 @@
+
+#include <algorithm>
 #include <iostream>
 #include <string>
 #include <vector>
-#include <algorithm>
-
-using namespace std;
-
-
-#include <iostream>
-#include <string>
-#include <vector>
-#include <algorithm>
 #include <cmath>
+#include <limits>
+
 
 using namespace std;
 
@@ -31,6 +26,13 @@ namespace {
     constexpr int PREV_SLOW_DAWN_TRESHOLD = 1500;
     constexpr int COLLISION_TRESHOLD = 2500;
     constexpr int PLAYER_COLLISION_TRESHOLD = 2100;
+    constexpr int CHECKPOINT_RADIUS = 600;
+    constexpr int POD_RADIUS = 400;
+
+    constexpr int COLLISIONS_ANGLE_TRESHOLD = 15;
+    constexpr float PI = 3.14f;
+    constexpr float SHOULD_SLOWDAWN_ANGLE_TRESHOLD = 60.0f;
+    
 }
 
 
@@ -187,7 +189,7 @@ class PodData
         {            
         }
         PodData(){};
-        void UpdatePod(const Vector2D& pos, const Vector2D& s, const int ch_point_id, const int a)
+        void UpdatePod(const Vector2D& pos, const Vector2D& s, const int a, const int ch_point_id)
         {
             position = pos;
             speed = s;
@@ -197,13 +199,24 @@ class PodData
             }
             check_point_id = ch_point_id;
             angle = a;
+            target_checkpoint = -1;
         }
+
+        setTargetCheckpoint()
+        bool Collide(const Vector2D& pos, const float collision_radius)
+        {
+            Vector2D offset = position-pos;
+            cerr<< " offset.Magnitude() "<< offset.Magnitude() << endl;
+            return  offset.Magnitude() < collision_radius * 2.0f;
+        }
+        
     public:
         Vector2D position;
         Vector2D speed;
         int check_point_id;
         int angle;
         int lap;
+        int target_checkpoint;
         
 };
 
@@ -220,6 +233,7 @@ class Game
         
         vector<PodData> pods;
         vector<Vector2D> checkpoints;
+        vector<bool> should_slowdawn;
         int laps;
         int nr_check_points;
         bool has_boost;
@@ -231,10 +245,31 @@ class Game
     {      
         pods.resize(4);
         nr_check_points = checkpoints.size();
+        
         longest_route_id = getLongestRouteID();
+        cerr<< "longest_route_id " << longest_route_id<< endl;
+        ComputeShouldSlowdawn();
     }
 
+    //checks if we should slow dawn when aiming
+    void ComputeShouldSlowdawn()
+    {
+        should_slowdawn.resize(nr_check_points);
+        for(int i = 0; i < nr_check_points; ++i )
+        {
+            Vector2D route1 = getRoute(i);
+            Vector2D route2 = getRoute(i+1);
+            float angle1 = route1.getAngle();
+            float angle2 = route2.getAngle();
+            if(abs(angle1 -angle2) <  ((SHOULD_SLOWDAWN_ANGLE_TRESHOLD * PI) / 180.0f))
+            {
+                should_slowdawn[i] = false;
+            } else {
+                should_slowdawn[i] = true;
+            }
 
+        }
+    }
 
     Game()
     {       
@@ -252,6 +287,14 @@ class Game
     {
         int score2 = pods[2].check_point_id + pods[2].lap * nr_check_points;
         int score3 = pods[3].check_point_id + pods[3].lap * nr_check_points;
+        //cerr<< "score2 " << score2<< endl;
+        //cerr<< "score3 " << score3<< endl;
+        //cerr<< "pods[2].lap " << pods[2].lap<< endl;
+        //cerr<< "pods[3].lap " << pods[3].lap<< endl;
+        //cerr<< "nr_check_points " << nr_check_points<< endl;
+        //cerr<< "pods[2].check_point_id " << pods[2].check_point_id<< endl;
+        //cerr<< "pods[3].check_point_id " << pods[3].check_point_id<< endl;
+        
         if(score2>score3)
         {
             return 2;
@@ -290,7 +333,7 @@ class Game
              float longeur = route.Magnitude();
              if( longest_route < longeur )
              {
-                id = i;
+                id = i;// (i-1)%nr_check_points;
                 longest_route = longeur;
              }
         }
@@ -312,7 +355,7 @@ class Game
         } 
         cerr << "thrust1 " << thrust1 << endl;
         
-
+        //checking distance if we need to slow dawn 
         float checkpoint_dist = offset.Magnitude();
         
        // cerr << "slow_dawn_treshold " << slow_dawn_treshold << endl;
@@ -324,33 +367,34 @@ class Game
         float prev_dist = prev_offset.Magnitude(); //distance to previous checkpoint
         float route_dist = route.Magnitude();//
         int slow_dawn_treshold = max ( SLOW_DAWN_TRESHOLD, (int)(route_dist/4));
-        if(checkpoint_dist<slow_dawn_treshold)
-        {
-            float thrust_scale = std::abs((float)checkpoint_dist /(float)slow_dawn_treshold);
-            
-            thrust_scale = std::clamp(thrust_scale, 0.0f, 1.0f);
-            
-            
-            thrust_scale = (float)MIN_THRUST + ((float)(MAX_THRUST-MIN_THRUST)* thrust_scale);
-            thrust_scale /= (float)MAX_THRUST;
-            thrust1 *= thrust_scale;
-            
-            cerr << "  thrust_scale " << thrust_scale << endl;
-            cerr << "  thrust " << thrust1 << endl;
-        } 
-        else if(prev_dist <  PREV_SLOW_DAWN_TRESHOLD && route_dist < LONG_ROUTE_TRESHOLD 
-        && std::abs(checkpoint_angle) > 90)
-        {
-            float thrust_scale = std::abs((float)prev_dist / (float) PREV_SLOW_DAWN_TRESHOLD);            
-            thrust_scale = std::clamp(thrust_scale, 0.0f, 1.0f);
-            thrust_scale = (float)MIN_THRUST + ((float)(MAX_THRUST-MIN_PTHRUST)* thrust_scale);
-            thrust_scale /= (float)MAX_THRUST;
-            
-            thrust1 *= thrust_scale;            
-            thrust1 = std::clamp(thrust1, MIN_PTHRUST, MAX_THRUST);
-            cerr << "  thrust prev dist " << thrust1 << endl;
+        if( should_slowdawn[pods[0].check_point_id] ){
+            if(checkpoint_dist<slow_dawn_treshold)
+            {
+                float thrust_scale = std::abs((float)checkpoint_dist /(float)slow_dawn_treshold);
+                
+                thrust_scale = std::clamp(thrust_scale, 0.0f, 1.0f);
+                
+                
+                thrust_scale = (float)MIN_THRUST + ((float)(MAX_THRUST-MIN_THRUST)* thrust_scale);
+                thrust_scale /= (float)MAX_THRUST;
+                thrust1 *= thrust_scale;
+                
+                cerr << "  thrust_scale " << thrust_scale << endl;
+                cerr << "  thrust " << thrust1 << endl;
+            } 
+            else if(prev_dist <  PREV_SLOW_DAWN_TRESHOLD && route_dist < LONG_ROUTE_TRESHOLD 
+            && std::abs(checkpoint_angle) > 90)
+            {
+                float thrust_scale = std::abs((float)prev_dist / (float) PREV_SLOW_DAWN_TRESHOLD);            
+                thrust_scale = std::clamp(thrust_scale, 0.0f, 1.0f);
+                thrust_scale = (float)MIN_THRUST + ((float)(MAX_THRUST-MIN_PTHRUST)* thrust_scale);
+                thrust_scale /= (float)MAX_THRUST;
+                
+                thrust1 *= thrust_scale;            
+                thrust1 = std::clamp(thrust1, MIN_PTHRUST, MAX_THRUST);
+                cerr << "  thrust prev dist " << thrust1 << endl;
+            }
         }
-
         out_pod1.out_x = checkpoint_pos.x;
         out_pod1.out_y = checkpoint_pos.y;
         
@@ -375,76 +419,32 @@ class Game
         
         //second pod will try to intercept winning opponent
         int opp_id = getWinningOpponentsID();
-        out_pod2.out_x = pods[opp_id].position.x;
-        out_pod2.out_y = pods[opp_id].position.y;
-        out_pod2.sthrust = "100";
-
-        /*if (checkpoint_angle > ANGLE_TRESHOLD || checkpoint_angle < -ANGLE_TRESHOLD)
-        {
-            thrust = (int)(1.0f - (float)(checkpoint_angle)/90.0f);
-            thrust = std::clamp(thrust, MIN_THRUST, MAX_THRUST);            
-        }            
-        else{             
-            thrust = MAX_THRUST;
-        }
+        //cerr<< " opp_id "<<opp_id<<endl;
+        Vector2D speed_offset = pods[opp_id].speed * 3.0f;
 
         
-        cerr << "distance " << checkpoint_dist << endl;
-        cerr << "angle " << checkpoint_angle << endl;
-        cerr << "route_dist " << route_dist << endl;
-        
-        
-        //checking distance
-        
-        cerr << " prev_dist " << prev_dist << endl;
-        int slow_dawn_treshold = max ( SLOW_DAWN_TRESHOLD, (int)(route_dist/4));
-        cerr << "slow_dawn_treshold " << slow_dawn_treshold << endl;
-        if(checkpoint_dist<slow_dawn_treshold)
-        {
-            float thrust_scale = std::abs((float)checkpoint_dist /(float)slow_dawn_treshold);
-            
-            thrust_scale = std::clamp(thrust_scale, 0.0f, 1.0f);
-            
-            
-            thrust_scale = (float)MIN_THRUST + ((float)(MAX_THRUST-MIN_THRUST)* thrust_scale);
-            thrust_scale /= (float)MAX_THRUST;
-            thrust *= thrust_scale;
-            
-            cerr << "  thrust_scale " << thrust_scale << endl;
-            cerr << "  thrust " << thrust << endl;
-        }//checking if we should slow dawn after passing checkpoint 
-        else if(prev_dist <  PREV_SLOW_DAWN_TRESHOLD && route_dist < LONG_ROUTE_TRESHOLD 
-        && std::abs(checkpoint_angle) > 90)
-        {
-            float thrust_scale = std::abs((float)prev_dist / (float) PREV_SLOW_DAWN_TRESHOLD);            
-            thrust_scale = std::clamp(thrust_scale, 0.0f, 1.0f);
-            thrust_scale = (float)MIN_THRUST + ((float)(MAX_THRUST-MIN_THRUST)* thrust_scale);
-            thrust_scale /= (float)MAX_THRUST;
-            
-            thrust *= thrust_scale;            
-            thrust = std::clamp(thrust, MIN_PTHRUST, MAX_THRUST);
-            cerr << "  thrust prev dist " << thrust << endl;
+        //check if we almost collide and 
+        bool almost_collide = pods[1].Collide(pods[opp_id].position, 1.3f*(float)POD_RADIUS );
+        cerr<< " opp_id "<<opp_id<<endl;
+        if(almost_collide ){
+            out_pod2.out_x = pods[opp_id].position.x ;//+ speed_offset.x;
+            out_pod2.out_y = pods[opp_id].position.y ;//+ speed_offset.y;
+        } else {
+            out_pod2.out_x = checkpoints[nr_check_points-1].x; 
+            out_pod2.out_y = checkpoints[nr_check_points-1].y;
         }
-        
-        Vector2D offset_pl_opp =  in_pos - opponent_pos;
-        
-        float opponent_player_dist = offset_pl_opp.Magnitude();
-        Vector2D offset_pod_opp =  checkpoint - opponent_pos;
-        
-        float opponent_pod_dist = offset_pod_opp.Magnitude();
-        cerr << " opponent_player_dist " <<  opponent_player_dist<< endl;
-        if(PLAYER_COLLISION_TRESHOLD > opponent_player_dist && std::abs(checkpoint_angle) < 90 )
+        float angle_op = pods[opp_id].speed.getAngle();
+        float angle_pod = pods[1].speed.getAngle();
+        cerr<< " angle_op "<<angle_op<<endl;
+        cerr<< " angle_pod "<<angle_pod<<endl;
+        if(almost_collide )//&& std::abs(angle_op - angle_pod)> (180.0f / PI)* (float)COLLISIONS_ANGLE_TRESHOLD )
         {
-            thrust = MAX_THRUST;
+            out_pod2.sthrust = "SHIELD";
+        } else {
+            out_pod2.sthrust = "50";
         }
-       // if(COLLISION_TRESHOLD > opponent_pod_dist && COLLISION_TRESHOLD >  checkpoint_dist)
-        {
-         //   thrust = 70;
-        }
+
         
-        
-        out_x = checkpoint.x;
-        out_y = checkpoint.y;*/
         
     }
 
@@ -468,7 +468,7 @@ int main()
         int checkpoint_x;
         int checkpoint_y;
         cin >> checkpoint_x >> checkpoint_y; cin.ignore();
-        cerr<< "checkpoint_x  checkpoint_y " << checkpoint_x  << checkpoint_y << endl;
+        cerr<< "checkpoint_x  checkpoint_y " << checkpoint_x  <<" "<< checkpoint_y << endl;
         checkpoints.push_back( Vector2D(checkpoint_x, checkpoint_y) );
     }
     Game game(checkpoints, laps);
@@ -495,6 +495,7 @@ int main()
             int angle_2; // angle of the opponent's pod
             int next_check_point_id_2; // next check point id of the opponent's pod
             cin >> x_2 >> y_2 >> vx_2 >> vy_2 >> angle_2 >> next_check_point_id_2; cin.ignore();
+            cerr << " next_check_point_id_2 " << std::to_string(next_check_point_id_2) << endl;
             PodData podData( Vector2D(x_2, y_2), Vector2D(vx_2, vy_2), angle_2, next_check_point_id_2 );
             game.UpdatePod(Vector2D(x_2, y_2), Vector2D(vx_2, vy_2), angle_2, next_check_point_id_2, i+2 );
         }

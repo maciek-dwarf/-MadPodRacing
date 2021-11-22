@@ -19,6 +19,10 @@ This solution worked really well  and brought me directly to gold.
 Gold:
 1 version - second pod try to intercept follows winning opponent.
 Boost is on the longest route betwen pods.
+Given whole raceing path i precomputed parts where we want ot slowdawn.
+Angle betwen this path (current checkpoint - previous checkpoint) and
+(next checkpoint - current checkpoint) bigger then treshold.
+Interceptor- work in progress.
 
 
 
