@@ -15,7 +15,7 @@ using namespace std;
  **/
 namespace {
     constexpr int SLOW_DAWN_TRESHOLD = 1800;
-    constexpr int BOOST_ANGLE_TRESHOLD = 5;
+    
     constexpr int BOOST_DISTANCE_TRESHOLD = 4000;
     constexpr int LONG_ROUTE_TRESHOLD = 4000;
     
@@ -26,12 +26,17 @@ namespace {
     constexpr int PREV_SLOW_DAWN_TRESHOLD = 1500;
     constexpr int COLLISION_TRESHOLD = 2500;
     constexpr int PLAYER_COLLISION_TRESHOLD = 2100;
-    constexpr int CHECKPOINT_RADIUS = 600;
-    constexpr int POD_RADIUS = 400;
+    constexpr float CHECKPOINT_RADIUS = 600;
+    constexpr float POD_RADIUS = 400;
 
     constexpr int COLLISIONS_ANGLE_TRESHOLD = 15;
-    constexpr float PI = 3.14f;
+    constexpr float PI = 3.14159265359f;
     constexpr float SHOULD_SLOWDAWN_ANGLE_TRESHOLD = 60.0f;
+    constexpr int SIMULATION_LEVEL = 4;
+    constexpr int OPPONENT_SIMULATION_LEVEL = 1;
+    constexpr float SPEED_TO_SHIELD = 120.0f;
+    constexpr float DOT_TO_SHIELD = 0.8f;
+    constexpr float BOOST_ANGLE_TRESHOLD = 10.0f * PI/180.0f;
     
 }
 
@@ -66,6 +71,10 @@ public:
     {
         float mag = Magnitude();
         float angle = acos( x/mag );
+        if(y < 0.0f)
+        {
+            angle = 2.0f* PI - angle;
+        }
         return angle;
     }
 
@@ -181,14 +190,21 @@ public:
     float x, y;
 };
 
+
 class PodData
 {
+    
+       
     public:
-        PodData(const Vector2D& pos, const Vector2D& s, const int id, const int a ) :
-            position(pos), speed(s), check_point_id(id), angle(a), lap(0)
+        PodData(const Vector2D& pos, const Vector2D& s, const int id, const float a ) :
+            position(pos), speed(s), check_point_id(id), angle(a), lap(0),
+            passed_checkpoint(false)
         {            
         }
+
         PodData(){};
+        PodData(const PodData&) = default;
+
         void UpdatePod(const Vector2D& pos, const Vector2D& s, const int a, const int ch_point_id)
         {
             position = pos;
@@ -199,24 +215,76 @@ class PodData
             }
             check_point_id = ch_point_id;
             angle = a;
-            target_checkpoint = -1;
+            
+
+                        
         }
 
-        setTargetCheckpoint()
+        void addAngle(float angleDiff){
+            angle += angleDiff;
+            //cerr<< " angle = a " << angle << endl;
+            if (angle < 0.0f) {
+                angle = 360.0f + angle;
+            } else if (angle > 360.0f) {
+                angle = angle - 360.0f;
+            }
+        }
+        //used for simulation - moves the pod
+        //following expert's rules
+        float move(float thrust, float angleDiff, bool debug = false) 
+        {
+            Vector2D prevpos(position);
+            addAngle(angleDiff);
+            //if(debug)
+            //    cerr<< " angleDiff " << angleDiff << " speed.x "<< speed.x << endl;
+            float rangle = angle * (PI / 180.0f);
+           // if(debug)
+             //   cerr<< " cos(rangle) " << cos(rangle) << endl;
+            speed += Vector2D((float)thrust * cos(rangle), (float)thrust * sin(rangle));
+            if(debug){
+               // cerr<< " position.x " << position.x << endl;
+               // cerr<< " position.y " << position.y << endl;
+            }
+            position+=speed;
+            int px = (int)position.x;
+            int py = (int)position.y;
+            position = Vector2D(px, py);
+            if(debug){
+                //cerr<< " after position.x " << position.x << endl;
+                //cerr<< " after position.y " << position.y << endl;
+            }
+            float mag = (position - prevpos).Magnitude();
+            //friction
+            speed *= 0.85f;
+
+
+            int sx = (int)speed.x;
+            int sy = (int)speed.y;
+            speed = Vector2D(sx, sy);
+            return mag;
+             
+        }
+
+        void setTargetCheckpoint(int tcheckpoint)
+        {
+            target_checkpoint = tcheckpoint;
+        }
+
         bool Collide(const Vector2D& pos, const float collision_radius)
         {
             Vector2D offset = position-pos;
-            cerr<< " offset.Magnitude() "<< offset.Magnitude() << endl;
-            return  offset.Magnitude() < collision_radius * 2.0f;
+            //cerr<< " offset.Magnitude() "<< offset.Magnitude() << endl;
+            return  offset.Magnitude() < (collision_radius + POD_RADIUS);
         }
         
     public:
         Vector2D position;
         Vector2D speed;
         int check_point_id;
-        int angle;
+        float angle;
         int lap;
         int target_checkpoint;
+        bool passed_checkpoint;
         
 };
 
@@ -250,6 +318,207 @@ class Game
         cerr<< "longest_route_id " << longest_route_id<< endl;
         ComputeShouldSlowdawn();
     }
+    //returns distance evaluation
+    float PickThrustAngleHelper(const PodData& pod, const Vector2D& target,
+         const vector<float>& angles,  const vector<float>& thrusts, int level, bool chaser)
+    {
+        
+
+        Vector2D offset = target -  pod.position;
+        float dist = offset.Magnitude();
+        if(level == 0)// || dist < 2.0f* CHECKPOINT_RADIUS)
+        {
+            
+            //cerr<< " pod.angle lvl 0 " << pod.angle << endl;
+            //cerr<< " offset.x " << offset.x << endl;
+            //cerr<< " offset.y " << offset.y << endl;
+            return dist;
+        }
+        
+        float min_dist = numeric_limits<float>::max();
+        
+        bool passed_checkpoint = false;
+        for(int cangle = 0;  cangle<angles.size(); ++cangle)
+        {
+            for(int cthrust = 0;  cthrust<thrusts.size(); ++cthrust)
+            {
+                PodData p(pod);
+                //cerr<< " pod.angle " << pod.angle<<endl;
+                
+
+                float dist = p.move(thrusts[cthrust], angles[cangle], false);
+                Vector2D t(target);
+                if(!chaser){
+                    if(p.passed_checkpoint)
+                    {
+                        t = checkpoints[(pod.check_point_id + 1)%nr_check_points];
+                    } else {
+                        t = checkpoints[pod.check_point_id];
+                    }
+                    float dist_eval =  PickThrustAngleHelper(p, t, angles, thrusts, level-1, chaser);
+                    if(!passed_checkpoint && p.passed_checkpoint)
+                    {
+                    
+                        passed_checkpoint = true;
+                        min_dist = dist_eval;
+                        
+                        
+                    }else if(min_dist > dist_eval && passed_checkpoint == p.passed_checkpoint)
+                    {
+                        min_dist = dist_eval;                        
+                        //if(cangle == 0)
+                        //cerr<< " best_pod.angle  " << best_pod.angle << endl; 
+                        //cerr<< " best_thrust  " << best_thrust << endl;
+
+                    }
+                } else{
+                    float dist_eval =  PickThrustAngleHelper(p, t, angles, thrusts, level-1, chaser);
+                    if(min_dist > dist_eval)
+                    {
+                        //if(debug)
+                        //    cerr<< " dist_eval " << dist_eval<<endl;
+                        min_dist = dist_eval;
+                        //cerr<< " min_dist " << min_dist<<endl;
+                                
+                    }
+                }
+
+                
+                //cerr<< " p.angle " << p.angle << " cthrust " << cthrust << 
+                //" dist "<< dist << " dist_eval " << dist_eval<< endl;
+               
+                                
+            }
+        }
+        if(passed_checkpoint)
+        {
+            min_dist -=1000000.0f;
+        }
+        return min_dist;
+
+    }
+
+    //find best target and thrust by simulating real movements 
+    void PickThrustAngle(OutputValues& out_pod, const PodData& pod, const int& level)
+    {
+        //vector<float> angles = { -18.0f * PI/180.0f, -9.0f * PI/180.0f, -2.0f* PI/180.0f, 0.0f, 2.0f* PI/180.0f, 
+        //    9.0f*PI/180.0f, 18.0f * PI/180.0f };
+        vector<float> angles = { -18.0f ,-9.0f, 0.0f, 9.0f, 18.0f  };
+        vector<float> angles1 = { -18.0f , 0.0f, 18.0f  };
+        //vector<float> sinuses = { sin(-18.0f * PI/180.0f), sin(-9.0f * PI/180.0f), sin(-2.0f* PI/180.0f), sin(0.0f), sin(2.0f* PI/180.0f), 
+        //    sin(9.0f*PI/180.0f), sin(18.0f * PI/180.0f) };
+        //vector<float> thrusts = { 5.0f, 50.0f, 100.0f };
+        vector<float> thrusts = { 5.0f,50.0f, 100.0f };
+        PodData best_pod;
+        float min_dist = numeric_limits<float>::max();
+        float best_thrust;
+        bool passed_checkpoint = false;
+        //cerr<< " pod.angle  " << pod.angle << endl;
+        for(int cangle = 0;  cangle<angles.size(); ++cangle)
+        {
+            for(int cthrust = 0;  cthrust<thrusts.size(); ++cthrust)
+            {
+                PodData p(pod);
+                float dist = p.move(thrusts[cthrust], angles[cangle], cangle == 0);                
+                p.passed_checkpoint = p.Collide( checkpoints[p.check_point_id], CHECKPOINT_RADIUS);
+                Vector2D target;
+                if(p.passed_checkpoint)
+                {
+                    target = checkpoints[(pod.check_point_id + 1)%nr_check_points];
+                } else {
+                    target = checkpoints[pod.check_point_id];
+                }
+                float dist_eval =  PickThrustAngleHelper(p, target, angles1, thrusts, level, false);
+                
+                //if(cangle == 0)
+                  //  cerr<< " thrusts[cthrust]  " << thrusts[cthrust] << endl;
+                if(!passed_checkpoint && p.passed_checkpoint)
+                {
+                    
+                    passed_checkpoint = true;
+                    min_dist = dist_eval;
+                    best_pod = p;
+                    best_thrust = thrusts[cthrust];
+                }else if(min_dist > dist_eval && passed_checkpoint == p.passed_checkpoint)
+                {
+                    min_dist = dist_eval;
+                    best_pod = p;
+                    best_thrust = thrusts[cthrust];
+                    //if(cangle == 0)
+                    //cerr<< " best_pod.angle  " << best_pod.angle << endl; 
+                    //cerr<< " best_thrust  " << best_thrust << endl;
+
+                }
+                                
+            }
+        }
+        int destX = (int) (pod.position.x + 2000.0f * cos(best_pod.angle * PI/180.0f));
+        int destY = (int) (pod.position.y + 2000.0f * sin(best_pod.angle* PI/180.0f));
+        Vector2D off =  best_pod.position - pod.position;
+        Vector2D out = pod.position + off*100;
+        //out_pod.out_x = (int)out.x;     
+        //out_pod.out_y = (int)out.y;
+        out_pod.out_x = destX;     
+        out_pod.out_y = destY;
+        cerr<< "out_pod.out_x " << out_pod.out_x<< endl;
+        out_pod.sthrust = std::to_string((int)best_thrust);
+    }
+
+    //find best target and thrust by simulating real movements 
+    //target is the winning opponent
+    void PickThrustAngleForChaser(OutputValues& out_pod, const PodData& pod, const Vector2D& target, 
+        const int& level)
+    {
+        //vector<float> angles = { -18.0f * PI/180.0f, -9.0f * PI/180.0f, -2.0f* PI/180.0f, 0.0f, 2.0f* PI/180.0f, 
+        //    9.0f*PI/180.0f, 18.0f * PI/180.0f };
+        vector<float> angles = { -18.0f ,-9.0f, 0.0f, 9.0f, 18.0f  };
+        //vector<float> sinuses = { sin(-18.0f * PI/180.0f), sin(-9.0f * PI/180.0f), sin(-2.0f* PI/180.0f), sin(0.0f), sin(2.0f* PI/180.0f), 
+        //    sin(9.0f*PI/180.0f), sin(18.0f * PI/180.0f) };
+        //vector<float> thrusts = { 5.0f, 50.0f, 100.0f };
+        vector<float> thrusts = { 5.0f, 50.0f, 100.0f };
+        PodData best_pod;
+        float min_dist = numeric_limits<float>::max();
+        float best_thrust;
+        
+        //cerr<< " pod.angle  " << pod.angle << endl;
+        for(int cangle = 0;  cangle<angles.size(); ++cangle)
+        {
+            for(int cthrust = 0;  cthrust<thrusts.size(); ++cthrust)
+            {
+                PodData p(pod);
+                float dist = p.move(thrusts[cthrust], angles[cangle], cangle == 0);                
+                //p.passed_checkpoint = p.Collide( checkpoints[p.check_point_id], CHECKPOINT_RADIUS);
+               
+                float dist_eval =  PickThrustAngleHelper(p, target, angles, thrusts, level, true);
+                
+                //if(cangle == 0)
+                  //  cerr<< " thrusts[cthrust]  " << thrusts[cthrust] << endl;
+                if(min_dist > dist_eval)
+                {
+                    min_dist = dist_eval;
+                    best_pod = p;
+                    best_thrust = thrusts[cthrust];
+                    //if(cangle == 0)
+                    //cerr<< " best_pod.angle  " << best_pod.angle << endl; 
+                    //cerr<< " best_thrust  " << best_thrust << endl;
+
+                }
+                                
+            }
+        }
+        int destX = (int) (pod.position.x + 2000.0f * cos(best_pod.angle * PI/180.0f));
+        int destY = (int) (pod.position.y + 2000.0f * sin(best_pod.angle* PI/180.0f));
+        Vector2D off =  best_pod.position - pod.position;
+        Vector2D out = pod.position + off*100;
+        //out_pod.out_x = (int)out.x;     
+        //out_pod.out_y = (int)out.y;
+        out_pod.out_x = destX;     
+        out_pod.out_y = destY;
+        cerr<< "out_pod.out_x " << out_pod.out_x<< endl;
+        out_pod.sthrust = std::to_string((int)best_thrust);
+    }
+
+
 
     //checks if we should slow dawn when aiming
     void ComputeShouldSlowdawn()
@@ -278,10 +547,10 @@ class Game
     void UpdatePod(const Vector2D& pos, const Vector2D& s, const int check_point_id, const int a, const int id)
     {   
         pods[id].UpdatePod(pos, s, check_point_id, a);
-
-        
+        cerr << "angle pod " << a <<endl;
 
     }
+
     //id of the winning opponents - important for pod  intercepting
     int getWinningOpponentsID()
     {
@@ -317,6 +586,36 @@ class Game
 
     }
 
+    int getChaserID()
+    {
+        int score0 = pods[0].check_point_id + pods[0].lap * nr_check_points;
+        int score1 = pods[1].check_point_id + pods[1].lap * nr_check_points;
+        if(score0>score1)
+        {
+            return 0;
+        } 
+        else if(score0<score1)
+        {
+            return 1;
+        } else {
+            const Vector2D& checkpoint_pos =  checkpoints[pods[0].check_point_id];
+            Vector2D offset0 = checkpoint_pos - pods[0].position;
+            Vector2D offset1 = checkpoint_pos - pods[1].position;
+            if(offset0.Magnitude() > offset1.Magnitude())
+            {
+                return 1;
+            } else 
+            {
+                return 0;
+            }
+        }
+    }
+
+    int getInterceptorID()
+    {
+        return 1 - getChaserID();
+    }
+
     Vector2D getRoute(const int id)
     {
         return (checkpoints[id] - checkpoints[(id-1)%nr_check_points]);
@@ -330,44 +629,51 @@ class Game
         for(int i = 0; i<nr_check_points; ++i)
         {
              Vector2D route = getRoute(i);
-             float longeur = route.Magnitude();
+             float longeur = getRoute(i).Magnitude();
+             cerr<< " longest_route < longeur " << longest_route << " " << longeur << endl;
+             cerr<< " route " << route.x << " "<< route.y<<endl; 
              if( longest_route < longeur )
              {
-                id = i;// (i-1)%nr_check_points;
+                id =  i;
                 longest_route = longeur;
              }
         }
         return id;
     }
     
-    void ComputeValues(OutputValues& out_pod1, OutputValues& out_pod2 )
+    void ComputeValues(OutputValues& out_pod1, OutputValues& out_pod2, bool& first )
     {
         int thrust1=MAX_THRUST, thrusts2 = MAX_THRUST;
-        const Vector2D& checkpoint_pos =  checkpoints[pods[0].check_point_id];
-        Vector2D offset = checkpoint_pos - pods[0].position;
-        float angle = offset.getAngle();
-        float checkpoint_angle  = angle - pods[0].speed.getAngle();
+        int chaser = 0; //getChaserID();
+        int interceptor = 1;//getInterceptorID();
+        const Vector2D& checkpoint_pos =  checkpoints[pods[chaser].check_point_id];
+        Vector2D offset = checkpoint_pos - pods[chaser].position;
+        cerr << "chaser " << chaser << endl;
+        
+        float checkpoint_dist = offset.Magnitude();
+
         //checking angle
-        if (checkpoint_angle > ANGLE_TRESHOLD || checkpoint_angle < -ANGLE_TRESHOLD)
+        /*if (checkpoint_angle > ANGLE_TRESHOLD || checkpoint_angle < -ANGLE_TRESHOLD)
         {
             thrust1 =(int)((float)thrust1 *(1.0f - (float)(checkpoint_angle)));
             thrust1 = std::clamp(thrust1, MIN_THRUST, MAX_THRUST);            
-        } 
-        cerr << "thrust1 " << thrust1 << endl;
+        } */
+        //cerr << "thrust1 " << thrust1 << endl;
         
         //checking distance if we need to slow dawn 
-        float checkpoint_dist = offset.Magnitude();
+        
         
        // cerr << "slow_dawn_treshold " << slow_dawn_treshold << endl;
         //Vector2D prev_route(getRoute(pods[0].check_point_id-1));
-        Vector2D route(getRoute(pods[0].check_point_id));
+        //Vector2D route(getRoute(pods[0].check_point_id));
         //
-        const Vector2D& prev_chposition = checkpoints[(pods[0].check_point_id-1)%nr_check_points];
-        Vector2D prev_offset = pods[0].position - prev_chposition;
+        //const Vector2D& prev_chposition = checkpoints[(pods[0].check_point_id-1)%nr_check_points];
+        /*Vector2D prev_offset = pods[0].position - prev_chposition;
         float prev_dist = prev_offset.Magnitude(); //distance to previous checkpoint
         float route_dist = route.Magnitude();//
-        int slow_dawn_treshold = max ( SLOW_DAWN_TRESHOLD, (int)(route_dist/4));
-        if( should_slowdawn[pods[0].check_point_id] ){
+        int slow_dawn_treshold = max ( SLOW_DAWN_TRESHOLD, (int)(route_dist/4));*/
+        
+        /*if( should_slowdawn[pods[0].check_point_id] ){
             if(checkpoint_dist<slow_dawn_treshold)
             {
                 float thrust_scale = std::abs((float)checkpoint_dist /(float)slow_dawn_treshold);
@@ -394,15 +700,84 @@ class Game
                 thrust1 = std::clamp(thrust1, MIN_PTHRUST, MAX_THRUST);
                 cerr << "  thrust prev dist " << thrust1 << endl;
             }
-        }
-        out_pod1.out_x = checkpoint_pos.x;
-        out_pod1.out_y = checkpoint_pos.y;
+        }*/
+        int opp_id = getWinningOpponentsID();
+        if(!first)
+        {
+            
+            PickThrustAngle(out_pod1,  pods[chaser], SIMULATION_LEVEL );
+            cerr<< " pods[0].check_point_id " << pods[0].check_point_id << endl;
+            //second pod will try to intercept winning opponent
         
+        //cerr<< " opp_id "<<opp_id<<endl;
+        
+            PodData opp(pods[opp_id]);
+            for(int i = 0 ; i<OPPONENT_SIMULATION_LEVEL+3; ++i)
+            {
+                opp.move(100, 0);
+            }
+            PickThrustAngleForChaser(out_pod2,  pods[interceptor], opp.position , OPPONENT_SIMULATION_LEVEL );
+            cerr<< " pods[1].check_point_id " << pods[interceptor].check_point_id << endl;
+
+        } else {
+            first = false;
+            out_pod1.out_x = checkpoint_pos.x;
+            out_pod1.out_y = checkpoint_pos.y;
+            out_pod1.sthrust = "100";
+            out_pod2.out_x = checkpoint_pos.x;
+            out_pod2.out_y = checkpoint_pos.y;
+            out_pod2.sthrust = "100";
+        }
+        Vector2D checkpoint_dir =  checkpoints[pods[chaser].check_point_id];
+        checkpoint_dir.Normalize();
+        Vector2D opp_pod_dir1(cos(pods[interceptor].angle *PI/180.0f ),  
+            sin(pods[interceptor].angle *PI/180.0f ));
+        float mspeed = pods[chaser].speed.Magnitude();
+        bool collide = pods[chaser].Collide(pods[interceptor].position, 1.2f * POD_RADIUS );
+        cerr <<" abs(opp_pod_dir1.DotProduct(checkpoint_dir) " << abs(opp_pod_dir1.DotProduct(checkpoint_dir)) << endl;
+        cerr << " pods[1].angle *PI/180.0f " << pods[interceptor].angle *PI/180.0f<<endl;
+        if(collide)
+            cerr << " collide 1 " <<endl;
+        if( collide && mspeed > SPEED_TO_SHIELD && (opp_pod_dir1.DotProduct(checkpoint_dir))
+         < DOT_TO_SHIELD){
+            out_pod1.sthrust = "SHIELD";
+        }
+        Vector2D opp_pod_dir2(cos(pods[2].angle *PI/180.0f ),  sin(pods[2].angle *PI/180.0f ));
+        collide = pods[chaser].Collide(pods[2].position, 1.2f * POD_RADIUS );
+        cerr <<" abs(opp_pod_dir2.DotProduct(checkpoint_dir) " << (opp_pod_dir2.DotProduct(checkpoint_dir)) << endl;        
+        cerr << " pods[2].angle *PI/180.0f " << pods[2].angle *PI/180.0f<<endl;
+        if(collide){
+            cerr << " collide 2 " <<endl;
+            cerr << " mspeed " << mspeed << endl;
+        }
+        if( collide && mspeed > SPEED_TO_SHIELD && (opp_pod_dir2.DotProduct(checkpoint_dir))
+         < DOT_TO_SHIELD){
+            out_pod1.sthrust = "SHIELD";
+        }
+        Vector2D opp_pod_dir3(cos(pods[3].angle *PI/180.0f ),  sin(pods[3].angle *PI/180.0f ));
+        cerr << " pods[3].angle *PI/180.0f " << pods[3].angle *PI/180.0f<<endl;
+        cerr <<" abs(opp_pod_dir3.DotProduct(checkpoint_dir) " << (opp_pod_dir3.DotProduct(checkpoint_dir)) <<endl;
+        collide = pods[chaser].Collide(pods[3].position, 1.2f * POD_RADIUS );
+        if(collide)
+            cerr << " collide 3 " <<endl;
+        if( collide && mspeed > SPEED_TO_SHIELD && (opp_pod_dir3.DotProduct(checkpoint_dir))
+         < DOT_TO_SHIELD){
+            out_pod1.sthrust = "SHIELD";
+        }
+
+
+
+        //cerr<< " out_pod1.sthrust " << out_pod1.sthrust << endl;
         //computing boost
         if(has_boost)
         {
+            float angle = offset.getAngle();
+            float checkpoint_angle  = angle - ((float)pods[chaser].angle * PI/180.0f);
+            cerr << " thruuustttt longest_route_id " << longest_route_id << " pods[0].check_point_id "
+            <<pods[chaser].check_point_id<<endl;
+            cerr << " std::abs(checkpoint_angle) " << std::abs(checkpoint_angle) << " angle "<< angle << endl;
             //use boost on first pod if we are on the longest route betwen 2 checkpoints
-            bool use_boost = pods[0].check_point_id == longest_route_id && 
+            bool use_boost = pods[chaser].check_point_id == longest_route_id && 
                 std::abs(checkpoint_angle)  < BOOST_ANGLE_TRESHOLD && checkpoint_dist > BOOST_DISTANCE_TRESHOLD;
             if(use_boost)
             {
@@ -410,39 +785,25 @@ class Game
                 out_pod1.sthrust = "BOOST";
                 has_boost = false;
             } else{
-                cerr << " thruuustttt " << endl;
+                
                 out_pod1.sthrust = std::to_string(thrust1);
             }
-        } else {
+        } else if (out_pod1.sthrust != "SHIELD"){
             out_pod1.sthrust = std::to_string(thrust1);
         }
         
-        //second pod will try to intercept winning opponent
-        int opp_id = getWinningOpponentsID();
-        //cerr<< " opp_id "<<opp_id<<endl;
-        Vector2D speed_offset = pods[opp_id].speed * 3.0f;
-
-        
+                
         //check if we almost collide and 
-        bool almost_collide = pods[1].Collide(pods[opp_id].position, 1.3f*(float)POD_RADIUS );
+        bool almost_collide = pods[interceptor].Collide(pods[opp_id].position, 1.2f * POD_RADIUS );
         cerr<< " opp_id "<<opp_id<<endl;
-        if(almost_collide ){
-            out_pod2.out_x = pods[opp_id].position.x ;//+ speed_offset.x;
-            out_pod2.out_y = pods[opp_id].position.y ;//+ speed_offset.y;
-        } else {
-            out_pod2.out_x = checkpoints[nr_check_points-1].x; 
-            out_pod2.out_y = checkpoints[nr_check_points-1].y;
-        }
-        float angle_op = pods[opp_id].speed.getAngle();
-        float angle_pod = pods[1].speed.getAngle();
-        cerr<< " angle_op "<<angle_op<<endl;
-        cerr<< " angle_pod "<<angle_pod<<endl;
-        if(almost_collide )//&& std::abs(angle_op - angle_pod)> (180.0f / PI)* (float)COLLISIONS_ANGLE_TRESHOLD )
+        
+        mspeed = pods[interceptor].speed.Magnitude();
+        if(almost_collide && mspeed > SPEED_TO_SHIELD)
         {
             out_pod2.sthrust = "SHIELD";
-        } else {
-            out_pod2.sthrust = "50";
-        }
+        } //else {
+          //  out_pod2.sthrust = "50";
+        //}
 
         
         
@@ -472,6 +833,7 @@ int main()
         checkpoints.push_back( Vector2D(checkpoint_x, checkpoint_y) );
     }
     Game game(checkpoints, laps);
+    bool first = true;
 
     // game loop
     while (1) {
@@ -483,7 +845,7 @@ int main()
             int angle; // angle of your pod
             int next_check_point_id; // next check point id of your pod
             cin >> x >> y >> vx >> vy >> angle >> next_check_point_id; cin.ignore();
-            cerr << " next_check_point_id " << std::to_string(next_check_point_id) << endl;
+            //cerr << " next_check_point_id " << std::to_string(next_check_point_id) << endl;
             //PodData podData( Vector2D(x, y), Vector2D(vx, vy), angle, next_check_point_id );
             game.UpdatePod(Vector2D(x, y), Vector2D(vx, vy), angle, next_check_point_id, i);
         }
@@ -495,7 +857,7 @@ int main()
             int angle_2; // angle of the opponent's pod
             int next_check_point_id_2; // next check point id of the opponent's pod
             cin >> x_2 >> y_2 >> vx_2 >> vy_2 >> angle_2 >> next_check_point_id_2; cin.ignore();
-            cerr << " next_check_point_id_2 " << std::to_string(next_check_point_id_2) << endl;
+            //cerr << " next_check_point_id_2 " << std::to_string(next_check_point_id_2) << endl;
             PodData podData( Vector2D(x_2, y_2), Vector2D(vx_2, vy_2), angle_2, next_check_point_id_2 );
             game.UpdatePod(Vector2D(x_2, y_2), Vector2D(vx_2, vy_2), angle_2, next_check_point_id_2, i+2 );
         }
@@ -504,7 +866,7 @@ int main()
         OutputValues out_pod2;
         //cout << out_pod1.out_x << " " << out_pod1.out_y << " " << "100" << endl;
         //cout << out_pod1.out_x << " " << out_pod1.out_y << " " << "100" << endl;
-        game.ComputeValues(out_pod1, out_pod2);
+        game.ComputeValues(out_pod1, out_pod2, first);
         // Write an action using cout. DON'T FORGET THE "<< endl"
         // To debug: cerr << "Debug messages..." << endl;
 
@@ -512,9 +874,9 @@ int main()
         // You have to output the target position
         // followed by the power (0 <= thrust <= 100)
         // i.e.: "x y thrust"
-        cerr << " out_pod1.out_x " << std::to_string(out_pod1.out_x) << endl;
-        cerr << " out_pod1.out_y " << out_pod1.out_y << endl;
-        cerr << " out_pod1.sthrust " << out_pod1.sthrust << endl;
+        //cerr << " out_pod1.out_x " << std::to_string(out_pod1.out_x) << endl;
+        //cerr << " out_pod1.out_y " << out_pod1.out_y << endl;
+        //cerr << " out_pod1.sthrust " << out_pod1.sthrust << endl;
         //cout << "8000 4500 100" << endl;
         //cout << "8000 4500 100" << endl;
         cout << out_pod1.out_x << " " << out_pod1.out_y << " " << out_pod1.sthrust << endl;
