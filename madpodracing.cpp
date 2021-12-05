@@ -40,6 +40,7 @@ namespace {
     constexpr float FORCE_THRUST_TRESHOLD = 2000.0f;
     constexpr float BIG_NUMBER = 30000.0f;
     constexpr float VERY_SMALL_NUMBER = -1000000000.0f;
+    constexpr float INTERCEPTOR_SEARCH_TRESHOLD = 4500.0f;
 
 }
 
@@ -509,7 +510,8 @@ public:
         return (float)score*BIG_NUMBER;
     }
 
-    float getDistanceEval(const Vector2D& target, const bool isInterceptor) const
+    float getDistanceEval(const Vector2D& target, 
+        const bool isInterceptor, const PodData& opp ) const
     {
         Vector2D offset = target - position;
         float dist = offset.Magnitude();
@@ -520,7 +522,17 @@ public:
         float diff_angle = angle * PI/180.0f- angle1;
         
         //return dist + pod.speed.Magnitude() * angle * angle * 10.0f;
-
+        if(isInterceptor)
+        {
+           /* Vector2D offset1 = opp.position - position;
+            float dot = opp.speed.DotProduct(speed);
+            bool well_oriented  =  speed.DotProduct( offset1 ) > 0.0f;
+            if(well_oriented && dot < -0.9f  && offset1.Magnitude() < 4000.0f)
+            {
+                dist-= 2000.0f;
+                //return pods[opp_id].position;
+            }*/
+        }
         //cerr<< " dist " << dist<< endl;
         if(!isInterceptor && passed_checkpoint)
         {
@@ -828,12 +840,12 @@ public:
         
         //return dist + pod.speed.Magnitude() * angle * angle * 10.0f;
 
-                cerr<< " dist " << dist<< endl;
+                //cerr<< " dist " << dist<< endl;
                 if(!false)
                 {
-                    dist+= p1.speed.Magnitude() * abs(diff_angle) * 50.0f;
+                  //  dist+= p1.speed.Magnitude() * abs(diff_angle) * 50.0f;
                 }
-                cerr<< " dist after " << dist<< endl;
+                //cerr<< " dist after " << dist<< endl;
 
                 int th = thrusts[cthrust];
                 float fitness = PickThrustAngleHelper(p1, p2, o1, o2, th, 
@@ -1107,7 +1119,7 @@ public:
         int collider = -1;
 
         max_fit_shielded = VERY_SMALL_NUMBER;
-        if( col0 || col2 || col3 )
+       /* if( col0 || col2 || col3 )
         {
             float min_t = min(t[0], min(t[1], t[2]));
 
@@ -1120,7 +1132,7 @@ public:
             if(t[2] == min_t){
                 collider = 3;
             } 
-            //cerr<< "collider " << collider << endl;
+            cerr<< "collider " << collider << endl;
                     //PodData cpod(pods[collider]);
             //p = pod;
             //cerr<< "jestem colli "  << endl;
@@ -1225,7 +1237,7 @@ public:
             
                     
                     
-        } else 
+        } else */
 
         {
 
@@ -1302,9 +1314,10 @@ public:
     float getRelativeFitnessChaser(const PodData& chaser, const PodData& p1, const Vector2D& target, 
         const PodData& p2, const PodData& p3)
     {
+        int opp_id = getWinningOpponentsID();
         float fitness = getRelativeFitness(chaser, 0.0f, p2,  p3, false);
         fitness *= 100.0f;
-        fitness = -p1.getDistanceEval(target, true);
+        fitness = -p1.getDistanceEval(target, true, pods[opp_id]);
         
         //cerr << " scoreChaser " << scoreChaser << " opponent_score "<< opponent_score << endl;
         //" opponent_score "<< opponent_score << endl;
@@ -1316,22 +1329,23 @@ public:
         const PodData& p2, const PodData& p3, const bool isInterceptor)
     {
         float scoreChaser = p0.getScore();
+        int opp_id = getWinningOpponentsID();
         //cerr << " scoreChaser " << scoreChaser << endl;
         //if(p0.passed_checkpoint)
         { 
-            scoreChaser-= p0.getDistanceEval(checkpoints[p0.check_point_id], isInterceptor );
+            scoreChaser-= p0.getDistanceEval(checkpoints[p0.check_point_id], false, pods[opp_id] );
         }
         
         //we assume that opponnents move with thrust 100
         float score2 = p2.getScore();
         //if(p2.passed_checkpoint)
         { 
-            score2 -= p2.getDistanceEval(checkpoints[p2.check_point_id], isInterceptor);
+            score2 -= p2.getDistanceEval(checkpoints[p2.check_point_id], false, pods[opp_id]);
         }
         float score3 = p3.getScore();
         //if(p3.passed_checkpoint)
         { 
-            score3 -=  p3.getDistanceEval(checkpoints[p3.check_point_id], isInterceptor);
+            score3 -=  p3.getDistanceEval(checkpoints[p3.check_point_id], false, pods[opp_id] );
         }
         float opponent_score = max(score2, score3);
         //cerr << " scoreChaser " << scoreChaser << " opponent_score "<< opponent_score << endl;
@@ -1354,7 +1368,50 @@ public:
 
     Vector2D setTargetForInterceptor(const PodData& pod, int opp_id)
     {
-        float t;
+        //find checkpoint where interceptor is closer then 
+        //opponent
+        const int opp_check = pods[opp_id].check_point_id;
+        Vector2D offset1 = pods[opp_id].position - pods[1].position;
+        float dot = pods[opp_id].speed.DotProduct(pods[1].speed);
+        bool well_oriented  =  pods[1].speed.DotProduct( offset1 ) > 0.0f;
+        if(well_oriented && dot < -0.9f  && offset1.Magnitude() < 4000.0f)
+        {
+            return pods[opp_id].position;
+        }
+        int ch_id = -1;
+        for(int i  = opp_check; i<nr_check_points+opp_check && ch_id == -1; ++i )
+        {
+            Vector2D offset_pl =  checkpoints[i % nr_check_points] - pods[1].position;
+            Vector2D offset_opp =  checkpoints[i % nr_check_points] - pods[opp_id].position;
+            if(offset_pl.Magnitude()< offset_opp.Magnitude())
+            {
+                ch_id = i%nr_check_points;                
+            }
+        }
+
+        if(ch_id == -1)
+        {
+            return pods[opp_id].position;
+        }
+
+        Vector2D offset =  checkpoints[ch_id % nr_check_points] - pods[1].position;
+        if( INTERCEPTOR_SEARCH_TRESHOLD> offset.Magnitude())
+        {
+            
+            int nr_moves = offset1.Magnitude()/750.0f;
+            cerr<<" nr_moves " << nr_moves << endl;
+            PodData opp(pods[opp_id]);
+            for (int i = 0; i < nr_moves+1; ++i)
+            {
+                opp.move(100);
+            }
+            return opp.position;
+        } else {
+            return checkpoints[ch_id % nr_check_points];
+        }
+
+
+        /*float t;
         cerr<< " jestem intercept "<< endl;
         Vector2D offset = pods[opp_id].position - pod.position;
         if( offset.Magnitude()< 6000.0f )
@@ -1372,57 +1429,7 @@ public:
         } else {
             cerr<< " pods[opp_id].position "<< pods[opp_id].position.x << " " << pods[opp_id].position.y<<endl;
             return pods[opp_id].position;
-        }
-
-        //offset.Normalize();
-        
-        /*t = numeric_limits<float>::max();
-        Vector2D soffset = pod.speed - pods[opp_id].speed;
-        Vector2D poffset = pod.position - pods[opp_id].position;
-        float a = soffset.DotProduct(soffset);
-        float b = soffset.DotProduct(poffset) * 2.0f;
-        float c = poffset.DotProduct(poffset) - 4.0f * (float)(POD_RADIUS * POD_RADIUS*1.2f);
-        float rc = b*b -4 * a *c;
-        
-        rc = sqrt(rc);
-        float x1 = (-b-rc)/(2.0f*a);
-        float x2 = (-b+rc)/(2.0f*a);
-        offset.Normalize();
-        cerr << " b/a c/a x1 " << b/a << " "<<c/a <<" " <<x1 <<endl;*/
-        //if(!pod.UCollide(pods[opp_id], t ))
-        //{
-        //    return pods[opp_id].position;
-        //}
-        //return  pod.position + offset*t;
-        /*Vector2D dir = pods[1].getDirection();
-        Vector2D offset_checkpoint1 = checkpoints[pods[opp_id].check_point_id] - pods[opp_id].position;
-        Vector2D offset_checkpoint2 = checkpoints[pods[opp_id].check_point_id] - pods[1].position;
-        bool first = offset_checkpoint2.Magnitude() > offset_checkpoint1.Magnitude();
-        offset_checkpoint1.Normalize();
-        first = (offset_checkpoint1.DotProduct(dir)) > 0.9f && first;
-        cerr << " abs(offset_checkpoint1.DotProduct(dir)) " << (offset_checkpoint1.DotProduct(dir)) << endl;
-        if (!first)
-        {
-            PodData opp(pods[opp_id]);
-            for (int i = 0; i < OPPONENT_SIMULATION_LEVEL + 5; ++i)
-            {
-                opp.move(100, 0);
-            }
-            return opp.position;
-            Vector2D dir2 = pods[opp_id].getDirection();
-            Vector2D pos = pods[1].position - pods[opp_id].position;
-            float dot = pos.DotProduct(dir2);
-            Vector2D target = dir2 * 0.5f * pos.Magnitude() * pos.Magnitude() / dot;
-            cerr << "DIR 1" << endl;
-            return target + pods[opp_id].position;
-        }
-        else
-        {
-            cerr << "DIR 2" << endl;
-            cerr << "pods[opp_id].position " << pods[opp_id].position.x << " " << pods[opp_id].position.y
-                << endl;
-            return pods[opp_id].position;
-        }*/
+        }*/        
     }
 
 
@@ -1535,18 +1542,18 @@ public:
             out_pod1.sthrust = "SHIELD";
         }*/
 
-       /* if (pods[chaser].shouldShield(checkpoint_dir, pods[interceptor]))
+        if (pods[chaser].shouldShield(checkpoint_dir, pods[interceptor]))
         {
             out_pod1.sthrust = "SHIELD";
-        }*/
-        /*if (pods[chaser].shouldShield(checkpoint_dir, pods[2]))
+        }
+        if (pods[chaser].shouldShield(checkpoint_dir, pods[2]))
         {
             out_pod1.sthrust = "SHIELD";
         }
         if (pods[chaser].shouldShield(checkpoint_dir, pods[3]))
         {
             out_pod1.sthrust = "SHIELD";
-        }*/
+        }
 
         //computing boost
         if (has_boost)
@@ -1572,14 +1579,14 @@ public:
         checkpoint_dir = checkpoints[pods[opp_id].check_point_id] - pods[opp_id].position;
         checkpoint_dir.Normalize();
 
-      /*  if (pods[interceptor].shouldShield(checkpoint_dir, pods[opp_id]))
+        if (pods[interceptor].shouldShield(checkpoint_dir, pods[opp_id]))
         {
             out_pod2.sthrust = "SHIELD";
         }
         if (pods[interceptor].shouldShield(pods[5 - opp_id]))
         {
             out_pod2.sthrust = "SHIELD";
-        }*/
+        }
 
 
 
