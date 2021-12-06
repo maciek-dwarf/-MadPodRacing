@@ -372,8 +372,7 @@ public:
         //if shielded we ignore thrust
         if (m < 9.0f) {
             speed += dir * (float)thrust;
-        }
-        //Vector2D((float)thrust * cos(rangle), (float)thrust * sin(rangle));
+        }       
 
         position += speed;
         int px = (int)position.x;
@@ -492,16 +491,88 @@ private:
     vector<bool> should_slowdawn;
     int laps;
     int nr_check_points;
-    bool has_boost;    
+    bool has_boost;
 
 public:
     Game(const vector<Vector2D>& chpoints, int l) :
         checkpoints(chpoints), laps(l), has_boost(true)
     {
         pods.resize(4);
-        nr_check_points = checkpoints.size();    
+        nr_check_points = checkpoints.size();
     }
+    Game() = default;
 
+    void UpdatePod(const Vector2D& pos, const Vector2D& s, const int a, const int check_point_id, const int id)
+    {
+        pods[id].UpdatePod(pos, s, a, check_point_id);
+    }
+    void ComputeValues(OutputValues& out_pod1, OutputValues& out_pod2, bool& first)
+    {
+        int thrust1 = MAX_THRUST, thrusts2 = MAX_THRUST;
+
+        int chaser = 0;
+        int interceptor = 1;
+        const Vector2D& checkpoint_pos = checkpoints[pods[chaser].check_point_id];
+        Vector2D offset = checkpoint_pos - pods[chaser].position;
+
+
+        float checkpoint_dist = offset.Magnitude();
+
+        int opp_id = getWinningOpponentsID();
+        if (!first)
+        {
+
+            PickThrustAngle(out_pod1, SIMULATION_LEVEL);
+            Vector2D target = setTargetForInterceptor(pods[interceptor], opp_id);
+
+            PickThrustAngleInterceptor(out_pod2, target, OPPONENT_SIMULATION_LEVEL);
+            cerr << " pods[1].check_point_id " << pods[interceptor].check_point_id << endl;
+
+        }
+        else {
+            first = false;
+            out_pod1.out_x = checkpoint_pos.x;
+            out_pod1.out_y = checkpoint_pos.y;
+            out_pod1.sthrust = "BOOST";
+            out_pod2.out_x = checkpoint_pos.x;
+            out_pod2.out_y = checkpoint_pos.y;
+            out_pod2.sthrust = "100";
+        }
+        Vector2D checkpoint_dir = checkpoints[pods[chaser].check_point_id] - pods[chaser].position;
+        checkpoint_dir.Normalize();
+
+        //finally we use simple check to determine shield
+        //we check relative pos of 2 pods 
+        if (pods[chaser].shouldShield(checkpoint_dir, pods[interceptor]))
+        {
+            out_pod1.sthrust = "SHIELD";
+        }
+        if (pods[chaser].shouldShield(checkpoint_dir, pods[2]))
+        {
+            out_pod1.sthrust = "SHIELD";
+        }
+        if (pods[chaser].shouldShield(checkpoint_dir, pods[3]))
+        {
+            out_pod1.sthrust = "SHIELD";
+        }
+
+        //shielding for interceptor
+        checkpoint_dir = checkpoints[pods[opp_id].check_point_id] - pods[opp_id].position;
+        checkpoint_dir.Normalize();
+
+        if (pods[interceptor].shouldShield(checkpoint_dir, pods[opp_id]))
+        {
+            out_pod2.sthrust = "SHIELD";
+        }
+        if (pods[interceptor].shouldShield(pods[5 - opp_id]))
+        {
+            out_pod2.sthrust = "SHIELD";
+        }
+
+    };
+
+
+private:
     //returns closest point in checkpoint depending on players position 
     //and orientation - finally just checkpoint pos.
     Vector2D getCheckpointPosFromPlayer(const Vector2D& pos,
@@ -537,7 +608,7 @@ public:
     float PickThrustAngleHelper(const PodData& chaser,
         const PodData& interceptor,
         const PodData& opp1,
-        const PodData& opp2,        
+        const PodData& opp2,
         const Vector2D& target,
         const vector<float>& angles,
         const vector<float>& thrusts,
@@ -554,23 +625,19 @@ public:
         }
 
         float max_fitness = VERY_SMALL_NUMBER;
-        int picked_thrust;
-
-        float max_fit_shielded = VERY_SMALL_NUMBER;
-        vector<float> thrusts1;
-        thrusts1 = thrusts;
-
+        
+        float max_fit_shielded = VERY_SMALL_NUMBER;        
 
 
         for (int cangle = 0; cangle < angles.size(); ++cangle)
         {
-            for (int cthrust = 0; cthrust < thrusts1.size(); ++cthrust)
+            for (int cthrust = 0; cthrust < thrusts.size(); ++cthrust)
             {
                 PodData p1(chaser);
                 PodData p2(interceptor);
                 PodData o1(opp1);
                 PodData o2(opp2);
-                
+
                 float mfit;
                 moveAltogether(p1, angles[cangle], thrusts[cthrust],
                     true, p2, o1, o2, mfit);
@@ -579,12 +646,12 @@ public:
                 Vector2D tar(target);
 
                 tar = checkpoints[p1.check_point_id];
-                
+
 
                 float fitness = PickThrustAngleHelper(p1, p2, o1, o2, tar,
                     angles, thrusts, level - 1);
-               
-                max_fitness = max(max_fitness, fitness);               
+
+                max_fitness = max(max_fitness, fitness);
 
             }
         }
@@ -601,21 +668,21 @@ public:
         vector<float> angles1 = { -18.0f , 0.0f, 18.0f };
 
         vector<float> thrusts, thrusts1;
-        
+
         PodData best_pod;
         PodData best_pod_shielded;
         float max_fit_shielded = VERY_SMALL_NUMBER;
         float max_fit = VERY_SMALL_NUMBER;
         float best_thrust = MAX_THRUST;
-        
+
         int level;
 
         thrusts1 = { 5.0f, 100.0f };
         thrusts = { 5.0f, 55.0f, 100.0f };
         level = lvl;
-        
+
         Vector2D offset = checkpoints[pods[0].check_point_id] - pods[0].position;
-        
+
         for (int cangle = 0; cangle < angles.size(); ++cangle)
         {
             for (int cthrust = 0; cthrust < thrusts.size(); ++cthrust)
@@ -625,17 +692,17 @@ public:
                 PodData o1(pods[2]);
                 PodData o2(pods[3]);
                 float  mfit;
-                float t[3];
+                
 
                 moveAltogether(p1, angles[cangle], thrusts[cthrust],
                     true, p2, o1, o2, mfit);
 
                 max_fit_shielded = max(max_fit_shielded, mfit);
-        
+
                 Vector2D target;
                 target = checkpoints[p1.check_point_id];
-                
-                
+
+
                 float fitness = PickThrustAngleHelper(p1, p2, o1, o2,
                     target, angles, thrusts1, level);
                 if (max_fit < fitness)
@@ -669,7 +736,7 @@ public:
 
     //find best target and thrust by simulating real movements 
     //target is the winning opponent
-    void PickThrustAngleInterceptor(OutputValues& out_pod, const PodData& pod, const Vector2D& target,
+    void PickThrustAngleInterceptor(OutputValues& out_pod, const Vector2D& target,
         const int& level)
     {
 
@@ -685,7 +752,7 @@ public:
         {
             for (int cthrust = 0; cthrust < thrusts.size(); ++cthrust)
             {
-                PodData p1(pod);
+                PodData p1(pods[1]);
                 PodData p2(pods[0]);
                 PodData o1(pods[2]);
                 PodData o2(pods[3]);
@@ -693,13 +760,12 @@ public:
 
                 moveAltogether(p1, angles[cangle], thrusts[cthrust],
                     false, p2, o1, o2, m_fitness_shielded);
-                //cerr<< " getRelativeFitness(p2, thrust, o1, o2 ); after "<< getRelativeFitness(p2, thrusts[cthrust] , o1, o2 ) <<endl;        
+
                 max_fitness_shielded = max(m_fitness_shielded, max_fitness_shielded);
 
-                int th = thrusts[cthrust];
+
                 float fitness = PickThrustAngleInterceptorHelper(p1, p2, o1, o2,
-                    th, target,
-                    angles, thrusts, level);
+                    target, angles, thrusts, level);
 
                 if (max_fitness < fitness)
                 {
@@ -714,15 +780,15 @@ public:
         if (max_fitness_shielded <= max_fitness)
         {
             Vector2D dir = best_pod.getDirection();
-            Vector2D dd = pod.position + dir * 5000.0f;
+            Vector2D dd = pods[1].position + dir * 5000.0f;
 
             out_pod.out_x = (int)dd.x;
             out_pod.out_y = (int)dd.y;
             out_pod.sthrust = std::to_string((int)best_thrust);
         }
         else {
-            Vector2D dir = pod.getDirection();
-            Vector2D dd = pod.position + dir * 5000.0f;
+            Vector2D dir = pods[1].getDirection();
+            Vector2D dd = pods[1].position + dir * 5000.0f;
 
             out_pod.out_x = (int)dd.x;
             out_pod.out_y = (int)dd.y;
@@ -737,7 +803,6 @@ public:
         const PodData& chaser,
         const PodData& op2,
         const PodData& op3,
-        int& pthrust,
         const Vector2D& target,
         const vector<float>& angles,
         const vector<float>& thrusts,
@@ -767,7 +832,7 @@ public:
                     false, p2, o1, o2, fit);
                 max_fit_shielded = max(fit, max_fit_shielded);
 
-                int th = thrusts[cthrust];
+
 
                 float fitness = getRelativeFitnessChaser(p2, p1, target,
                     o1, o2);
@@ -975,7 +1040,7 @@ public:
         return col0 || col2 || col3;
     }
 
-    Game() = default;
+
 
     //used for evaluated pods position for interceptor
     //its fitness for chaser and opponnents is modulated by distance of the interceptor
@@ -993,7 +1058,7 @@ public:
 
     //used for evaluated pods position - the biger the better
     //diffrence betwen score of our chaser and opponents winning pod
-    float getRelativeFitness(const PodData& p0, 
+    float getRelativeFitness(const PodData& p0,
         const PodData& p2, const PodData& p3, const bool isInterceptor)
     {
 
@@ -1013,14 +1078,7 @@ public:
         return scoreChaser - opponent_score;
     }
 
-    //
-    void UpdatePod(const Vector2D& pos, const Vector2D& s, const int a, const int check_point_id, const int id)
-    {
 
-        //cerr << " id chuj: " << id << " check_point_id " << check_point_id << endl;
-        pods[id].UpdatePod(pos, s, a, check_point_id);
-
-    }
 
     //set the target for interceptor
     Vector2D setTargetForInterceptor(const PodData& pod, int opp_id)
@@ -1072,6 +1130,7 @@ public:
 
 
     //id of the winning opponents - important for pod  intercepting
+    // we check nr of pods passed and then distance to pod
     int getWinningOpponentsID()
     {
         int score2 = pods[2].check_point_id + pods[2].lap * nr_check_points;
@@ -1105,92 +1164,6 @@ public:
     {
         return (checkpoints[id] - checkpoints[(id - 1) % nr_check_points]);
     }
-
-    //find id of the longest route - used to compute boost
-    /*int getLongestRouteID()
-    {
-        int id = 0;
-        float longest_route = std::numeric_limits<float>::min();
-        for (int i = 0; i < nr_check_points; ++i)
-        {
-            Vector2D route = getRoute(i);
-            float longeur = getRoute(i).Magnitude();
-            if (longest_route < longeur)
-            {
-                id = i;
-                longest_route = longeur;
-            }
-        }
-        return id;
-    }*/
-
-    void ComputeValues(OutputValues& out_pod1, OutputValues& out_pod2, bool& first)
-    {
-        int thrust1 = MAX_THRUST, thrusts2 = MAX_THRUST;
-
-        int chaser = 0;
-        int interceptor = 1;
-        const Vector2D& checkpoint_pos = checkpoints[pods[chaser].check_point_id];
-        Vector2D offset = checkpoint_pos - pods[chaser].position;
-
-
-        float checkpoint_dist = offset.Magnitude();
-
-        int opp_id = getWinningOpponentsID();
-        if (!first)
-        {
-
-            PickThrustAngle(out_pod1, SIMULATION_LEVEL);            
-            Vector2D target = setTargetForInterceptor(pods[interceptor], opp_id);
-            
-            PickThrustAngleInterceptor(out_pod2, pods[interceptor], target, OPPONENT_SIMULATION_LEVEL);
-            cerr << " pods[1].check_point_id " << pods[interceptor].check_point_id << endl;
-
-        }
-        else {
-            first = false;
-            out_pod1.out_x = checkpoint_pos.x;
-            out_pod1.out_y = checkpoint_pos.y;
-            out_pod1.sthrust = "BOOST";
-            out_pod2.out_x = checkpoint_pos.x;
-            out_pod2.out_y = checkpoint_pos.y;
-            out_pod2.sthrust = "100";
-        }
-        Vector2D checkpoint_dir = checkpoints[pods[chaser].check_point_id] - pods[chaser].position;
-        checkpoint_dir.Normalize();
-
-        //finally we use simple check to determine shield
-        //we check relative pos of 2 pods 
-        if (pods[chaser].shouldShield(checkpoint_dir, pods[interceptor]))
-        {
-            out_pod1.sthrust = "SHIELD";
-        }
-        if (pods[chaser].shouldShield(checkpoint_dir, pods[2]))
-        {
-            out_pod1.sthrust = "SHIELD";
-        }
-        if (pods[chaser].shouldShield(checkpoint_dir, pods[3]))
-        {
-            out_pod1.sthrust = "SHIELD";
-        }
-
-        //shielding for interceptor
-        checkpoint_dir = checkpoints[pods[opp_id].check_point_id] - pods[opp_id].position;
-        checkpoint_dir.Normalize();
-
-        if (pods[interceptor].shouldShield(checkpoint_dir, pods[opp_id]))
-        {
-            out_pod2.sthrust = "SHIELD";
-        }
-        if (pods[interceptor].shouldShield(pods[5 - opp_id]))
-        {
-            out_pod2.sthrust = "SHIELD";
-        }
-
-
-
-    }
-
 
 };
 
