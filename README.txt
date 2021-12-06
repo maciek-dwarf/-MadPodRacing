@@ -48,6 +48,11 @@ I left it commented in the code.
 Debugging  with cerr output - nightmare even on the GPU it's easier.
 On the forum i read about genetic algorithm approach which apparently get's to legend but 
 i haven't implemented it.
+
+Got to legend by hacking - this code isn't 100% clean but as an excuse i blame 
+insufficient tools ( 1 file for the code ).
+
+
 Was interesting and fun!!!!
 
 
